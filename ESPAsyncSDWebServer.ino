@@ -60,11 +60,8 @@
 #include <SPI.h>
 #include <ArduinoJson.h>
 #include <SD.h>
-#include <MYWIFI.h>
 
 const int pin_CS_SDcard = 15;
-const char* ssid = MY_WIFI_SSID;
-const char* password = MY_WIFI_PASSWORD;
 const char* host = "SDAsync";
 AsyncWebServer server(80);
 DNSServer dns;
