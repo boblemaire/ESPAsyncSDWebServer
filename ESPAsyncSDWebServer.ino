@@ -7,13 +7,16 @@
   While I didn't benchmark it against the synchronous version, it is
   noticeably faster.
 
-  There was a slight problem with no context in the callback
-  while downloading an SD file.  It was resolved by serializing the
-  requests with a FiFoqueue. While this may have a slight impact on performance,
-  there may be merit in limiting the concurrent downloads in the interest 
-  keeping heap consumption down.  Once again, no real data, just a hunch.
+  This version is completely asynchronous.  There is nothing in Loop.  Can be used
+  as a foundation for any web enabled application by simply adding handlers for
+  additional request types.
 
-  The best part about this program is the ACE editor and file manager.
+  Thanks to me-no-dev for showing me how to maintain context in content callback handlers.
+  Also updated to use Benoît Blanchon's Arduino Json to build Json directory responses.
+  The best part about this program is the ACE editor and file manager, that makes it a
+  possible to develop JS/Ajax applications using only your browser and an ESP8266 w/SD.
+
+  Requires ESPAsyncWiFiManager available on GitHub.
 
   The original author's copyright follows:
 
@@ -52,6 +55,7 @@
 #define FS_NO_GLOBALS
 #include <FS.h>
 #include <ESPAsyncWebServer.h>
+#include <ESPAsyncWiFiManager.h>
 #include <ESP8266mDNS.h>
 #include <SPI.h>
 #include <ArduinoJson.h>
@@ -63,56 +67,20 @@ const char* ssid = MY_WIFI_SSID;
 const char* password = MY_WIFI_PASSWORD;
 const char* host = "SDAsync";
 AsyncWebServer server(80);
-
-/**************************************************************************************************
- *   Simple class to manage request FiFo queue.  Used to serialize downloads.
- **************************************************************************************************/
-class AWSreqQueue { 
-   
-  struct reqQueue {
-    reqQueue* next;
-    AsyncWebServerRequest *request;
-    reqQueue(){next=NULL; request=NULL;};
-  };
-
-  public:
-    void queue(AsyncWebServerRequest *request){
-      reqQueue* newQueue = new reqQueue;
-      newQueue->request = request;
-      reqQueue* curQueue = &queueHead;
-      while(curQueue->next != NULL) curQueue = curQueue->next;
-      curQueue->next = newQueue;
-    }
-    
-    AsyncWebServerRequest* dequeue(){
-      if(queueHead.next == NULL) return NULL;
-      reqQueue* curQueue = queueHead.next;
-      queueHead.next = curQueue->next;
-      AsyncWebServerRequest* request = curQueue->request;
-      delete curQueue;
-      return request;
-    }
-
-    bool isEmpty(){return (queueHead.next == NULL);}
-    
-  private:
-    reqQueue queueHead;
-};
-
-
-
-AWSreqQueue WsDownloadQueue;                  // Instance of above FiFo
-bool WSDownloadActive = false;                // Semaphore to control serialization
-
+DNSServer dns;
 
 void returnOK(AsyncWebServerRequest *request) {request->send(200, "text/plain", "");}
   
 void returnFail(AsyncWebServerRequest *request, String msg) {request->send(500, "text/plain", msg + "\r\n");}
 
 bool loadFromSdCard(AsyncWebServerRequest *request) {
-      static File dataFile;
       String path = request->url();
       String dataType = "text/plain";
+      struct fileBlk {
+        File dataFile;
+      };
+      fileBlk *fileObj = new fileBlk;
+      
       if(path.endsWith("/")) path += "index.htm";
       if(path.endsWith(".src")) path = path.substring(0, path.lastIndexOf("."));
       else if(path.endsWith(".htm")) dataType = "text/html";
@@ -126,14 +94,15 @@ bool loadFromSdCard(AsyncWebServerRequest *request) {
       else if(path.endsWith(".pdf")) dataType = "application/pdf";
       else if(path.endsWith(".zip")) dataType = "application/zip";
      
-      dataFile  = SD.open(path.c_str());
-      if(dataFile.isDirectory()){
+      fileObj->dataFile  = SD.open(path.c_str());
+      if(fileObj->dataFile.isDirectory()){
         path += "/index.htm";
         dataType = "text/html";
-        dataFile = SD.open(path.c_str());
+        fileObj->dataFile = SD.open(path.c_str());
       }
     
-      if (!dataFile){
+      if (!fileObj->dataFile){
+        delete fileObj;
         return false;
       }
     
@@ -143,11 +112,14 @@ bool loadFromSdCard(AsyncWebServerRequest *request) {
             // we don't have the File handles. So we only allow one active download request
             // at a time and keep the file handle in static.  I'm open to a solution.
     
-      request->send(dataType, dataFile.size(), [](uint8_t *buffer, size_t maxlen, size_t index) -> size_t {
-                                                  size_t thisSize = dataFile.read(buffer, maxlen);
-                                                  if((index + thisSize) >= dataFile.size()){
-                                                    dataFile.close();
-                                                    WSDownloadActive = false;
+      request->_tempObject = (void*)fileObj;
+      request->send(dataType, fileObj->dataFile.size(), [request](uint8_t *buffer, size_t maxlen, size_t index) -> size_t {
+                                                  fileBlk *fileObj = (fileBlk*)request->_tempObject;
+                                                  size_t thisSize = fileObj->dataFile.read(buffer, maxlen);
+                                                  if((index + thisSize) >= fileObj->dataFile.size()){
+                                                    fileObj->dataFile.close();
+                                                    request->_tempObject = NULL;
+                                                    delete fileObj;
                                                   }
                                                   return thisSize;
                                                 });
@@ -279,9 +251,7 @@ void printDirectory(AsyncWebServerRequest *request) {
 void handleNotFound(AsyncWebServerRequest *request){
   String path = request->url();
   if(path.endsWith("/")) path += "index.htm";
-  if(File testFile = SD.open(path.c_str())){
-    testFile.close();
-    WsDownloadQueue.queue(request);
+  if(loadFromSdCard(request)){
     return;
   }
   String message = "\nNo Handler\r\n";
@@ -300,38 +270,15 @@ void handleNotFound(AsyncWebServerRequest *request){
   DBG_OUTPUT_PORT.print(message);
 }
 
-void AwsCheckQueues(){
-  if( ! WSDownloadActive &&
-      ! WsDownloadQueue.isEmpty()){
-    WSDownloadActive = true;  
-    loadFromSdCard(WsDownloadQueue.dequeue());
-  }
-}
-
 void setup(void){
   
   DBG_OUTPUT_PORT.begin(115200);
   DBG_OUTPUT_PORT.setDebugOutput(true);
   DBG_OUTPUT_PORT.print("\n");
 
-  WiFi.begin(ssid, password);
-  DBG_OUTPUT_PORT.print("Connecting to ");
-  DBG_OUTPUT_PORT.println(ssid);
+  AsyncWiFiManager wifiManager(&server, &dns);
+  wifiManager.autoConnect();
 
-  // Wait for connection
-  
-  uint8_t i = 0;
-  while (WiFi.status() != WL_CONNECTED && i++ < 20) {//wait 10 seconds
-    delay(500);
-  }
-  if(i == 21){
-    DBG_OUTPUT_PORT.print("Could not connect to");
-    DBG_OUTPUT_PORT.println(ssid);
-    while(1) delay(500);
-  }
-  DBG_OUTPUT_PORT.print("Connected! IP address: ");
-  DBG_OUTPUT_PORT.println(WiFi.localIP());
-  
   if (MDNS.begin(host)) {
     MDNS.addService("http", "tcp", 80);
     DBG_OUTPUT_PORT.println("MDNS responder started");
@@ -356,9 +303,8 @@ void setup(void){
     } 
   }
   DBG_OUTPUT_PORT.println("SD Initialized.");
- 
 }
 
 void loop(void){
-   AwsCheckQueues();
+   
 }
