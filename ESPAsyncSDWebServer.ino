@@ -1,5 +1,42 @@
 
-
+/*
+  Adaptation of SDWebServer (synchronous).
+  Copyright (c)2017 Bob Lemaire. All rights reserved.
+  This is a derivative work that uses ESPAsyncWebServer instead of ESP8266WebServer.
+  While I didn't benchmark it against the synchronous version, it is
+  noticeably faster.
+  This version is completely asynchronous.  There is nothing in Loop.  Can be used
+  as a foundation for any web enabled application by simply adding handlers for
+  additional request types.
+  Thanks to me-no-dev for showing me how to maintain context in content callback handlers.
+  Also updated to use Benoît Blanchon's Arduino Json to build Json directory responses.
+  The best part about this program is the ACE editor and file manager, that makes it a
+  possible to develop JS/Ajax applications using only your browser and an ESP8266 w/SD.
+  Requires ESPAsyncWiFiManager available on GitHub.
+  The original author's copyright follows:
+  ********************************************************************************* 
+ 
+  SDWebServer - Example WebServer with SD Card backend for esp8266
+  Copyright (c) 2015 Hristo Gochkov. All rights reserved.
+  This file is part of the ESP8266WebServer library for Arduino environment.
+  This library is free software; you can redistribute it and/or
+  modify it under the terms of the GNU Lesser General Public
+  License as published by the Free Software Foundation; either
+  version 2.1 of the License, or (at your option) any later version.
+  This library is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+  Lesser General Public License for more details.
+  You should have received a copy of the GNU Lesser General Public
+  License along with this library; if not, write to the Free Software
+  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+  Have a FAT Formatted SD Card connected to the SPI port of the ESP8266
+  The web root is the SD Card root folder
+  File extensions with more than 3 charecters are not supported by the SD Library
+  File Names longer than 8 charecters will be truncated by the SD library, so keep filenames shorter
+  index.htm is the default index (works on subfolders as well)
+  upload the contents of SdRoot to the root of the SDcard and access the editor by going to http://esp8266sd.local/edit
+*/
 
 
 #define DBG_OUTPUT_PORT Serial
